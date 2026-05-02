@@ -1,0 +1,105 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>ESTIFY Pricing Conflict Resolver</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Use Google Fonts for premium look -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Sidebar (optional) -->
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-logo">E</div><div>
+      <div class="brand-title">ESTIFY</div>
+      <div class="brand-sub">Pricing Intelligence</div>
+    </div></div>
+    <nav>
+      <a href="#input" class="nav-item active">Input</a>
+      <a href="#results" class="nav-item">Results</a>
+      <a href="#plan" class="nav-item">Generated Plan</a>
+    </nav>
+    <div class="sidebar-card">
+      <div class="sidebar-label">STATUS</div>
+      <div class="status-row"><div class="status-dot"></div>Ready</div>
+      <div class="sidebar-small">Load variant lines and run analysis</div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">ENTERPRISE VARIANT PRICING</div>
+        <h1>Pricing Conflict Resolver</h1>
+        <p class="description">Detects same-config price conflicts across colours and generates Odoo fixes (attribute edits + pricelist).</p>
+      </div>
+      <div class="actions">
+        <button id="clearBtn" class="btn">Clear</button>
+        <button id="runBtn" class="btn primary">Run Analysis</button>
+      </div>
+    </header>
+
+    <!-- Input Section -->
+    <section id="input" class="input-panel">
+      <h2>Variant Lines Input</h2>
+      <p>Paste each variant line (format: e.g. <code>(COR) B5131 (FAB-VIS, 2.5S)</code>) and run analysis.</p>
+      <textarea id="inputBox" class="input-box" placeholder="(COR) B5131 (FAB-VIS, 2.5S)\n(COR) B5131 (PE, 1.5ER+1.5NA-L+...)\n..."></textarea>
+    </section>
+
+    <!-- Results Section -->
+    <section id="results" class="table-card">
+      <div class="table-head">
+        <div><div class="table-title">Analysis Results</div><div class="table-sub">Parsed variants and pricing</div></div>
+      </div>
+      <div class="table-wrap">
+        <table id="outputTable">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Code</th>
+              <th>Config</th>
+              <th>Grade</th>
+              <th>Price</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Plan Section -->
+    <section id="plan" class="export-panel">
+      <h2>Generated Import Plan</h2>
+      <p>CSV/JSON payload for attribute edits and pricelist rules:</p>
+      <div class="plan-output">
+        <textarea id="planOutput" readonly class="output-box"></textarea>
+      </div>
+      <div class="plan-buttons">
+        <button id="copyCsvBtn" class="btn">Copy CSV</button>
+        <button id="copyJsonBtn" class="btn primary">Copy JSON</button>
+      </div>
+    </section>
+
+    <!-- Tables (A & B) -->
+    <section class="tables">
+      <h2>Report Tables</h2>
+      <h3>Conflict Summary (Table A)</h3>
+      <table>
+        <thead><tr><th>Model</th><th>Config</th><th>Codes</th><th>Prices</th><th>Strategy</th></tr></thead>
+        <tbody id="conflictTable"></tbody>
+      </table>
+      <h3>Export Payload Preview (Table B)</h3>
+      <table>
+        <thead><tr><th>Type</th><th>Field1</th><th>Field2</th><th>Value</th></tr></thead>
+        <tbody id="payloadTable"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

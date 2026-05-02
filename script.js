@@ -1,158 +1,237 @@
-// ==Snippet Start==
-// Assumes your existing ESTIFY functions (parseVariant, getGrade, getFinalPrice, loadData, runCalculator) are loaded.
+// script.js
+// Loads JSON data, parses variants, detects conflicts, and generates Odoo import plan.
 
-// MAIN FUNCTION: Analyze variants and generate override plan
-async function generateVariantPricingOverrides() {
-  try {
-    // 1. Load the JSON data (no changes to format)
-    await loadData();
-
-    // 2. Get all variants parsed by your logic
-    const inputText = document.getElementById("input").value || "";
-    const lines = inputText.split("\n").filter(l => l.trim() !== "");
-    const variants = [];
-
-    for (let line of lines) {
-      try {
-        const parsed = parseVariant(line);
-        const grade = getGrade(parsed.code);
-        const price = getFinalPrice(parsed.model, parsed.config, grade);
-        variants.push({ ...parsed, grade, price });
-      } catch (e) {
-        console.warn(`Parsing/skipped: "${line.trim()}"  (Error: ${e})`);
-      }
-    }
-
-    // 3. Group by model + config to detect conflicts
-    const grouped = {};
-    variants.forEach(v => {
-      const key = `${v.model}__${v.config}`;
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(v);
-    });
-
-    // 4. Find conflicts: same model/config, multiple distinct prices
-    const conflicts = [];
-    for (let key in grouped) {
-      const group = grouped[key];
-      const prices = Array.from(new Set(group.map(v => Number(v.price))));
-      if (prices.length > 1) {
-        const [model, config] = key.split("__");
-        conflicts.push({ model, config, variants: group });
-      }
-    }
-
-    // 5. Build override plan: attribute value edits + pricelist rules
-    const attributeEdits = [];
-    const pricelistRules = [];
-
-    conflicts.forEach(conflict => {
-      const { model, config, variants } = conflict;
-      // Strategy: set config extra = 0 for base, then override each variant
-      // (Assume base price = smallest price variant, but for simplicity we set extra=0 and use pricelist for actual prices)
-      // 5a. Attribute value update for this configuration (value extra = 0)
-      attributeEdits.push({
-        model,
-        attribute: "Configuration",
-        value: config,
-        extra_price: 0,
-        exclude_for: []  // we could exclude from some product if needed (requires product_template_id mapping)
-      });
-      // 5b. Pricelist rules for each variant in the conflict
-      variants.forEach(v => {
-        // Placeholder mapping functions - replace with actual mapping logic or IDs
-        const productTmplId = getProductTemplateId(v.model); // USER: implement mapping
-        const variantId = getVariantId(v.model, v.code, v.config); // USER: implement mapping
-        if (variantId == null) {
-          console.warn(`Missing variant mapping for ${v.model} | ${v.code} | ${v.config}`);
-        }
-        // For fixed price, we use pricelist rule with variant ID (or SKU) and fixed price = v.price
-        pricelistRules.push({
-          product_template_id: productTmplId || "MISSING_MAPPING",
-          product_variant_id: variantId || "MISSING_MAPPING",
-          variant_code: `${v.model}|${v.code}|${v.config}`,  // for reference
-          fixed_price: Number(v.price)
-        });
-      });
-    });
-
-    // 6. Conflict Summary Table (Model, Config, Codes, Prices, Strategy)
-    console.log("Conflict Summary:");
-    conflicts.forEach(conf => {
-      const codes = conf.variants.map(v => v.code).join(" / ");
-      const prices = conf.variants.map(v => formatValue(v.price)).join(" / ");
-      console.table([{ 
-        Model: conf.model, 
-        Config: conf.config, 
-        Codes: codes, 
-        Prices: prices, 
-        Strategy: "Shared config = 0 + pricelist overrides" 
-      }]);
-    });
-
-    // 7. Prepare export text for attribute edits and pricelist rules
-    const attrCsv = [
-      ["Model","Attribute","Value","Extra Price","Exclude For (Template IDs)"]
-    ];
-    attributeEdits.forEach(a => {
-      attrCsv.push([
-        a.model,
-        a.attribute,
-        a.value,
-        a.extra_price,
-        a.exclude_for.join(";") || ""
-      ]);
-    });
-    const plCsv = [
-      ["Product Template ID","Variant ID or SKU","Fixed Price"]
-    ];
-    pricelistRules.forEach(p => {
-      plCsv.push([
-        p.product_template_id,
-        p.product_variant_id !== "MISSING_MAPPING" ? p.product_variant_id : p.variant_code,
-        p.fixed_price
-      ]);
-    });
-
-    const attrCsvText = attrCsv.map(r => r.join(",")).join("\n");
-    const plCsvText = plCsv.map(r => r.join(",")).join("\n");
-    const exportText = 
-      "# -- ATTRIBUTE VALUE UPDATES (CSV) --\n" + attrCsvText + "\n\n" +
-      "# -- VARIANT PRICELIST RULES (CSV) --\n" + plCsvText;
-
-    // 8. Copy export text to clipboard
-    if (exportText) {
-      copyText(exportText);
-      console.log("Odoo override plan (CSV) copied to clipboard. Preview below:");
-      console.log(exportText);
-    } else {
-      console.warn("No conflicts detected; nothing to export.");
-    }
-
-  } catch (err) {
-    console.error("Error in generateVariantPricingOverrides:", err);
+// ==========================
+// 1. Load Data
+// ==========================
+let material_master = [], price_sheet = [];
+async function loadData() {
+  const [mRes, pRes] = await Promise.all([
+    fetch('material_master.json'),
+    fetch('price_sheet.json')
+  ]);
+  if (!mRes.ok || !pRes.ok) {
+    console.error('Failed to load JSON data.');
+    return;
   }
+  material_master = await mRes.json();
+  price_sheet = await pRes.json();
 }
 
-// Helper stubs for ID mapping - replace with your actual logic
+// ==========================
+// 2. Helper Functions
+// ==========================
+function formatValue(val) {
+  return (Math.round(val) || 0).toLocaleString();
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => 
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c] || c)
+  );
+}
+function copyText(text) {
+  navigator.clipboard.writeText(text)
+    .then(()=> console.log('Copied to clipboard.'))
+    .catch(err=> console.warn('Clipboard copy failed.', err));
+}
+
+// Placeholder mapping functions
 function getProductTemplateId(model) {
-  // Example: map model name to Odoo product.template ID
-  // Return null if unknown, to flag MISSING_MAPPING
+  // TODO: Map model code to actual Odoo product.template ID.
   return null;
 }
 function getVariantId(model, code, config) {
-  // Example: map specific variant (model+code+config) to Odoo product.variant ID
+  // TODO: Map (model+code+config) to actual Odoo variant ID.
   return null;
 }
 
-// Use the same clipboard copy from ESTIFY (alert suppressed in console)
-function copyText(text) {
-  navigator.clipboard.writeText(text)
-    .then(() => console.log("Copied plan to clipboard"))
-    .catch(() => console.warn("Clipboard copy failed; manually copy from console"));
+// ==========================
+// 3. Parse Input Variants
+// ==========================
+// Assume parseVariant, getGrade, getFinalPrice exist globally
+async function analyzeVariants() {
+  await loadData();
+  const inputText = document.getElementById("inputBox").value || "";
+  const lines = inputText.split("\\n").filter(l=>l.trim());
+  const results = [];
+  for (let line of lines) {
+    try {
+      const {model, code, config} = parseVariant(line);
+      const grade = getGrade(code);
+      const price = getFinalPrice(model, config, grade);
+      results.push({model, code, config, grade, price});
+    } catch (err) {
+      console.warn(`Line skipped (parse error): "${line}"`, err);
+    }
+  }
+  return results;
 }
 
-// Run the generator (you can also tie this to a button)
-generateVariantPricingOverrides();
+// ==========================
+// 4. Detect Conflicts
+// ==========================
+function findConflicts(variants) {
+  // Group by model+config
+  const groups = {};
+  variants.forEach(v => {
+    const key = `${v.model}||${v.config}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(v);
+  });
+  // Filter groups with >1 distinct price
+  const conflicts = [];
+  for (let key in groups) {
+    const group = groups[key];
+    const uniquePrices = [...new Set(group.map(v=>v.price))];
+    if (uniquePrices.length > 1) {
+      const [model, config] = key.split("||");
+      conflicts.push({model, config, variants: group});
+    }
+  }
+  return conflicts;
+}
 
-// ==Snippet End==
+// ==========================
+// 5. Generate Fix Plan
+// ==========================
+function generatePlan(conflicts) {
+  const attrEdits = [];
+  const priceOverrides = [];
+
+  conflicts.forEach(conf => {
+    const {model, config, variants} = conf;
+    // Attribute edit: set config extra to 0
+    attrEdits.push({
+      model: model,
+      attribute: "Configuration",
+      value: config,
+      extra: 0,
+      exclude_for: [] // no excludes by default
+    });
+    // Variant pricelist rules
+    variants.forEach(v => {
+      const tmplId = getProductTemplateId(v.model) || "MISSING_MAPPING";
+      const varId = getVariantId(v.model, v.code, v.config) || "MISSING_MAPPING";
+      priceOverrides.push({
+        model: v.model,
+        code: v.code,
+        config: v.config,
+        product_template_id: tmplId,
+        variant_id: varId,
+        fixed_price: Number(v.price)
+      });
+    });
+  });
+
+  return {attrEdits, priceOverrides};
+}
+
+// ==========================
+// 6. Display Results & Copy
+// ==========================
+function displayConflictTable(conflicts) {
+  const tbody = document.getElementById("conflictTable");
+  tbody.innerHTML = "";
+  conflicts.forEach(conf => {
+    const codes = conf.variants.map(v=>v.code).join(", ");
+    const prices = conf.variants.map(v=>formatValue(v.price)).join(" / ");
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${escapeHtml(conf.model)}</td>
+      <td>${escapeHtml(conf.config)}</td>
+      <td>${escapeHtml(codes)}</td>
+      <td>${escapeHtml(prices)}</td>
+      <td>Base Extra=0 + variant pricelists</td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+function displayPayloadTable(attrEdits, priceOverrides) {
+  const tbody = document.getElementById("payloadTable");
+  tbody.innerHTML = "";
+  // Attribute edits
+  attrEdits.forEach(a => {
+    const cells = [`Attribute`, a.model, a.value, a.extra, a.exclude_for.join(";")];
+    const tr = document.createElement("tr");
+    tr.innerHTML = cells.map(c => `<td>${escapeHtml(c)}</td>`).join("");
+    tbody.appendChild(tr);
+  });
+  // Pricelist rules
+  priceOverrides.forEach(p => {
+    const idDisplay = p.variant_id === "MISSING_MAPPING" 
+                      ? `${p.model}|${p.code}|${p.config}` 
+                      : p.variant_id;
+    const cells = [`Pricelist`, p.model, idDisplay, formatValue(p.fixed_price)];
+    const tr = document.createElement("tr");
+    tr.innerHTML = cells.map(c => `<td>${escapeHtml(c)}</td>`).join("");
+    tbody.appendChild(tr);
+  });
+}
+
+function copyCsv(attrEdits, priceOverrides) {
+  // Build CSV
+  let csv = "Type,Model,Value,Extra/Price,Exclude/ID\n";
+  attrEdits.forEach(a => {
+    csv += `Attr,${a.model},${a.value},${a.extra},${a.exclude_for.join(";")}\n`;
+  });
+  priceOverrides.forEach(p => {
+    const idVal = p.variant_id === "MISSING_MAPPING" 
+                  ? `${p.model}|${p.code}|${p.config}` 
+                  : p.variant_id;
+    csv += `Price,${p.model},${idVal},${p.fixed_price}\n`;
+  });
+  copyText(csv);
+  document.getElementById("planOutput").textContent = csv;
+}
+
+function copyJson(attrEdits, priceOverrides) {
+  const data = {attribute_edits: attrEdits, pricelist_items: priceOverrides};
+  const jsonStr = JSON.stringify(data, null, 2);
+  copyText(jsonStr);
+  document.getElementById("planOutput").textContent = jsonStr;
+}
+
+// ==========================
+// 7. Run Analysis Handler
+// ==========================
+document.getElementById("runBtn").onclick = async () => {
+  const variants = await analyzeVariants();
+  if (!variants.length) {
+    alert("No valid variant lines found.");
+    return;
+  }
+  // Populate results table
+  const outTbody = document.querySelector("#outputTable tbody");
+  outTbody.innerHTML = "";
+  variants.forEach(v => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(v.model)}</td>
+      <td>${escapeHtml(v.code)}</td>
+      <td>${escapeHtml(v.config)}</td>
+      <td>${escapeHtml(v.grade)}</td>
+      <td>${formatValue(v.price)}</td>
+      <td></td>
+    `;
+    outTbody.appendChild(tr);
+  });
+  // Find conflicts and display
+  const conflicts = findConflicts(variants);
+  displayConflictTable(conflicts);
+  // Generate plan and display payloads
+  const plan = generatePlan(conflicts);
+  displayPayloadTable(plan.attrEdits, plan.priceOverrides);
+  
+  // Setup copy buttons
+  document.getElementById("copyCsvBtn").onclick = () => copyCsv(plan.attrEdits, plan.priceOverrides);
+  document.getElementById("copyJsonBtn").onclick = () => copyJson(plan.attrEdits, plan.priceOverrides);
+};
+
+document.getElementById("clearBtn").onclick = () => {
+  document.getElementById("inputBox").value = "";
+  document.querySelector("#outputTable tbody").innerHTML = "";
+  document.getElementById("planOutput").textContent = "";
+  document.getElementById("conflictTable").innerHTML = "";
+  document.getElementById("payloadTable").innerHTML = "";
+};
